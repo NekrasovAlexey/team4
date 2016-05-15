@@ -1,32 +1,104 @@
 'use strict';
 
-const authRequired = require('./middleware/authRequired');
+const debug = require('debug')('team4:controllers:pages');
 
-const pages = require('./controllers/pages');
-const users = require('./controllers/users');
-const quests = require('./controllers/quests');
+const questsModel = require('../models/quests');
+const userModel = require('../models/users');
+const randInt = require('../lib/random').randInt;
 
-module.exports = function (app) {
-    app.get('/', pages.index);
-    app.post('/user/login', users.validate, users.login);
-    app.post('/user/reg', users.validate, users.register);
-    app.post('/user/logout', users.logout);
-    app.get('/user/:name', pages.userPage);
-    app.get('/auth', pages.auth);
-    app.get('/reg', pages.reg);
-    app.post('/get-more-quests', pages.index);
-    app.post('/start-quest', authRequired, users.startQuest);
-    app.get('/quest/:name', quests.quest);
-    app.post('/quest/checkin', quests.checkin);
-    app.post('/like-quest', quests.likeQuest);
-    app.post('/place-comment', authRequired, quests.addCommentToPlace);
-    app.post('/quest-comment', authRequired, quests.addCommentToQuest);
-    app.get('/create-quest', authRequired, pages.createQuest);
-    app.post('/create-quest', authRequired, quests.upload, quests.create);
-    app.all('*', pages.error404);
+function filterFields(fields) {
+    return obj => {
+        let resObj = {};
+        fields.forEach(field => {
+            if (field === 'photo') {
+                resObj[field] = getRandomPhoto(obj);
+            } else if (obj.hasOwnProperty(field)) {
+                resObj[field] = obj[field];
+            }
+        });
+        return resObj;
+    };
+}
 
-    app.use((err, req, res) => {
-        console.error(err);
-        res.sendStatus(500);
+function getRandomPhoto(quest) {
+    return quest.places[randInt(quest.places.length)].img;
+}
+
+exports.index = (req, res) => {
+    debug('index');
+    const quests = questsModel(req.db);
+    let questNum = req.body.hasOwnProperty('skip') ? parseInt(req.body.skip, 10) : 0;
+    let questLimit = req.body.hasOwnProperty('get') ? parseInt(req.body.get, 10) : 5;
+    quests.getLimitQuests(questNum, questLimit).then(chosenQuests => {
+        chosenQuests = chosenQuests.map(filterFields(['url', 'photo', 'title']));
+        if (questNum === 0) {
+            res.renderLayout('./pages/index/index.hbs',
+                {quests: chosenQuests, commonData: req.commonData});
+        } else {
+            res.status(200).json({quests: chosenQuests});
+        }
     });
+};
+
+exports.userPage = (req, res) => {
+    debug('userPage');
+    let users = userModel(req.db);
+    var response = {
+        username: req.params.name,
+        commonData: req.commonData
+    };
+    users.isUserExist(req.params.name)
+        .then(users => {
+            if (users > 0) {
+                return req.params.name;
+            }
+            res.renderLayout('./pages/notFound/notFound.hbs',
+                {commonData: req.commonData});
+            throw new Error('это как return, только следующий then не будет работать');
+        })
+        .then(users.getFinishedQuests)
+        .then(finished => {
+            finished = finished.map(filterFields(['url', 'title']));
+            if (finished.length !== 0) {
+                Object.assign(response, {finished: finished});
+            }
+            return req.params.name;
+        })
+        .then(users.getQuestsInProgress)
+        .then(inProcess => {
+            inProcess = inProcess.map(filterFields(['url', 'title']));
+            if (inProcess.length !== 0) {
+                Object.assign(response, {inProcess: inProcess});
+            }
+            if (req.params.name === response.commonData.user) {
+                Object.assign(response, {self: true});
+            }
+            console.log(response);
+            res.renderLayout('./pages/userPage/userPage.hbs', response);
+        });
+};
+
+exports.auth = (req, res) => {
+    debug('auth');
+    res.renderLayout('./pages/authorization/authorization.hbs', {commonData: req.commonData});
+};
+
+exports.createQuest = (req, res) => {
+    debug('createQuest');
+    res.renderLayout('./pages/createQuest/createQuest.hbs', {commonData: req.commonData});
+};
+
+exports.editQuest = (req, res) => {
+    debug('editQuest');
+    res.renderLayout('./pages/editQuest/editQuest.hbs', {commonData: req.commonData});
+};
+
+exports.reg = (req, res) => {
+    debug('reg');
+    res.renderLayout('./pages/registration/registration.hbs', {commonData: req.commonData});
+};
+
+exports.error404 = (req, res) => {
+    debug('error404');
+    res.status(404).renderLayout('./pages/notFound/notFound.hbs', {commonData: req.commonData});
 };
